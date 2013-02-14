@@ -47,6 +47,11 @@ class StackTrace:
     nb_frames = None
     frame_ids = None
 
+def read4(file):
+    return struct.unpack('>i', file.read(4))[0]
+
+def read8(file):
+    return struct.unpack('>q', file.read(8))[0]
 
 def main(argv):
     (opts, args) = parseargs(argv)
@@ -70,14 +75,20 @@ def main(argv):
         format = ""
         b = f.read(1)
         while ord(b): format += b; b = f.read(1)    # read null-terminated string
-        sizeid = struct.unpack('>i', f.read(4))[0]     # big-endian size of identifiers
-        epoch_ms = struct.unpack(">q", f.read(8))[0]
+        sizeid = read4(f)     # big-endian size of identifiers
+        epoch_ms = read8(f)
         print format, time.strftime("%Y%m%d %H:%M:%S", time.gmtime(epoch_ms / 1000))
         
         print "sizeof(ID)=", sizeid
-        if sizeid != 4:
-            print "unable to process hprof when sizeof(ID) is not 4"
-            sys.exit(2)
+        def readid(file):
+            if sizeid == 4:
+                return read4(file)
+            elif sizeid == 8:
+                return read8(file)
+            else:
+                print "unable to process hprof when sizeof(ID) is not 4"
+                sys.exit(2)
+
 
         offset_records = f.tell()
 
@@ -97,8 +108,8 @@ def main(argv):
         tag = ord(f.read(1))
 
         while remaining:
-            record_time = struct.unpack('>i', f.read(4))[0]
-            length = struct.unpack('>i', f.read(4))[0]
+            record_time = read4(f)
+            length = read4(f)
             #print "tag:", tag, 'time:', record_time, 'length:', length
 
             if tag == 1:    # String in UTF-8
@@ -106,12 +117,12 @@ def main(argv):
                 nb_strings = nb_strings + 1
             elif tag == 4:  # stack frame
                 frame = StackFrame()
-                frame.id = struct.unpack(">i", f.read(4))[0]
-                frame.method_id = struct.unpack(">i", f.read(4))[0]
-                frame.signature_id = struct.unpack(">i", f.read(4))[0]
-                frame.source_id = struct.unpack(">i", f.read(4))[0]
-                frame.class_serial = struct.unpack(">i", f.read(4))[0]
-                frame.line_number  = struct.unpack(">i", f.read(4))[0]
+                frame.id = readid(f)
+                frame.method_id = readid(f)
+                frame.signature_id = readid(f)
+                frame.source_id = readid(f)
+                frame.class_serial = read4(f)
+                frame.line_number  = read4(f)
                 frames[frame.id] = frame
                 toresolve[frame.method_id] = None
                 toresolve[frame.signature_id] = None
@@ -120,12 +131,12 @@ def main(argv):
                 
             elif tag == 5:  # stack trace
                 trace = StackTrace()
-                trace.serial = struct.unpack(">i", f.read(4))[0]
-                trace.thread_serial = struct.unpack(">i", f.read(4))[0]
-                trace.nb_frames = struct.unpack(">i", f.read(4))[0]
+                trace.serial = read4(f)
+                trace.thread_serial = read4(f)
+                trace.nb_frames = read4(f)
                 trace.frame_ids = []
                 for i in range(trace.nb_frames):
-                    trace.frame_ids.append(struct.unpack(">i", f.read(4))[0])
+                    trace.frame_ids.append(readid(f))
                 #print "stack trace", "stack_serial:", stack_serial, "thread_serial:", thread_serial, "nb_frames:", nb_frames
                 #if trace.nb_frames > 0:
                 #    f.seek(trace.nb_frames * sizeid, os.SEEK_CUR)
@@ -134,10 +145,10 @@ def main(argv):
                 traces[trace.serial] = trace
             elif tag == 2:   # load class
                 nb_classes = nb_classes + 1
-                class_serial = struct.unpack(">i", f.read(4))[0]
-                classobject_id = struct.unpack(">i", f.read(4))[0]
-                stacktrace_serial = struct.unpack(">i", f.read(4))[0]
-                classname_id = struct.unpack(">i", f.read(4))[0]
+                class_serial = read4(f)
+                classobject_id = readid(f)
+                stacktrace_serial = read4(f)
+                classname_id = readid(f)
                 toresolve[classobject_id] = None
                 toresolve[classname_id] = None
                 classes[class_serial] = classname_id
@@ -167,11 +178,11 @@ def main(argv):
         remaining = True
         tag = ord(f.read(1))
         while remaining:
-            record_time = struct.unpack('>i', f.read(4))[0]
-            length = struct.unpack('>i', f.read(4))[0]
+            record_time = read4(f)
+            length = read4(f)
             if tag == 1:
-                string_id = struct.unpack(">i", f.read(4))[0]
-                string = f.read(length - 4)
+                string_id = readid(f)
+                string = f.read(length - sizeid)
                 if string_id in toresolve:
                     del toresolve[string_id]
                     s[string_id] = string
@@ -185,7 +196,7 @@ def main(argv):
                 remaining = False
 
         if len(toresolve) > 0:
-            print "*** Unable to resolve", len(toresolve), "string(s):", toresolve
+            print "*** Unable to resolve", len(toresolve), "string(s)"
 
         #
         # report stack traces
